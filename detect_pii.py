@@ -36,37 +36,6 @@ def parse_args():
     return parser.parse_args()
 
 
-SYSTEM_PROMPT = """\
-You are a safety classifier for a wealth management platform deployed across Asia \
-(SG, HK, PH, MY, TH, ID, JP, KR, IN, VN, TW, MM, KH, BN).
-
-Your task: detect Personally Identifiable Information (PII) in user messages.
-
-Flag as Unsafe with Categories: PII if the message contains ANY of:
-- Person names (Asian naming conventions: bin/binti, a/l, a/p, Khun, Ibu, Puan, etc.)
-- National IDs: Singapore NRIC/FIN, Malaysia MyKad/IC, Hong Kong HKID, Thai national ID, \
-Indonesian KTP, Philippine SSS/TIN, Japan My Number, Korea RRN, India PAN/Aadhaar, \
-PRC ID, Taiwan ID, Vietnam CCCD, Myanmar NRC
-- Passport numbers from any country
-- Bank account numbers, credit card numbers, IBAN codes
-- Email addresses, phone numbers
-- Physical addresses, postal codes
-- Dates of birth
-- Medical information linked to identifiable individuals
-- Quasi-identifiers that could identify a specific person (unique combinations of age, \
-ethnicity, occupation, location, medical condition)
-
-Flag as Safe with Categories: None if the message contains:
-- Generic financial questions with no personal data
-- ISIN codes, SWIFT/BIC codes, currency codes (SGD, HKD, MYR, THB, etc.)
-- Organization names (banks, regulators, companies)
-- Fictional/test data explicitly labeled as such
-- Portfolio IDs, transaction IDs without personal linkage
-
-Respond ONLY in this exact format:
-Safety: <Safe|Unsafe>
-Categories: <PII|None>"""
-
 
 def query_ollama(url, model, query):
     """Send a query to Ollama and return the response text."""
@@ -74,10 +43,7 @@ def query_ollama(url, model, query):
         f"{url}/api/chat",
         json={
             "model": model,
-            "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": query},
-            ],
+            "messages": [{"role": "user", "content": query}],
             "stream": False,
         },
     )
