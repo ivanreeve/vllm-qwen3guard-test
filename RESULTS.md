@@ -1,5 +1,8 @@
 # Qwen3Guard PII Test Results
 
+> Legacy baseline from the previous Ollama-based setup. Current workflow in this
+> repo uses vLLM + `Qwen/Qwen3Guard-Gen-4B` (see `README.md`).
+
 ## Run Details
 
 - Command: `uv run python detect_pii.py --verbose`

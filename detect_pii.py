@@ -3,6 +3,7 @@
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -12,16 +13,29 @@ from tqdm import tqdm
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Test Qwen3Guard PII detection")
-    parser.add_argument(
-        "--model",
-        default="sileader/qwen3guard:4b",
-        help="Ollama model name (default: sileader/qwen3guard:4b)",
+    parser = argparse.ArgumentParser(
+        description="Test Qwen3Guard PII detection via vLLM OpenAI-compatible API"
     )
     parser.add_argument(
-        "--ollama-url",
-        default="http://localhost:11434",
-        help="Ollama server URL (default: http://localhost:11434)",
+        "--model",
+        default="Qwen/Qwen3Guard-Gen-4B",
+        help="Model name exposed by vLLM (default: Qwen/Qwen3Guard-Gen-4B)",
+    )
+    parser.add_argument(
+        "--api-base",
+        default="http://localhost:8000/v1",
+        help="OpenAI-compatible API base URL (default: http://localhost:8000/v1)",
+    )
+    parser.add_argument(
+        "--api-key",
+        default=os.environ.get("VLLM_API_KEY", ""),
+        help="Optional API key for the endpoint (defaults to VLLM_API_KEY env var)",
+    )
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        default=120,
+        help="Per-request timeout in seconds (default: 120)",
     )
     parser.add_argument(
         "--dataset",
@@ -36,19 +50,39 @@ def parse_args():
     return parser.parse_args()
 
 
-
-def query_ollama(url, model, query):
-    """Send a query to Ollama and return the response text."""
+def query_chat_api(api_base, model, query, api_key="", timeout=120):
+    """Send a query to an OpenAI-compatible chat endpoint and return response text."""
+    endpoint = f"{api_base.rstrip('/')}/chat/completions"
+    headers = {}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
     resp = requests.post(
-        f"{url}/api/chat",
+        endpoint,
+        headers=headers,
         json={
             "model": model,
             "messages": [{"role": "user", "content": query}],
+            "temperature": 0,
             "stream": False,
         },
+        timeout=timeout,
     )
     resp.raise_for_status()
-    return resp.json()["message"]["content"]
+    payload = resp.json()
+    choices = payload.get("choices", [])
+    if not choices:
+        raise ValueError("No choices returned by API")
+
+    message = choices[0].get("message", {})
+    content = message.get("content", "")
+    if isinstance(content, list):
+        # Some providers return structured content parts.
+        content = "".join(
+            item.get("text", "")
+            for item in content
+            if isinstance(item, dict)
+        )
+    return str(content)
 
 
 def parse_guard_output(text):
@@ -225,12 +259,18 @@ def main():
         dataset = json.load(f)
 
     print(f"Loaded {len(dataset)} test entries")
-    print(f"Using model: {args.model} via {args.ollama_url}")
+    print(f"Using model: {args.model} via {args.api_base}")
 
     # Run evaluation
     results = []
     for entry in tqdm(dataset, desc="Evaluating"):
-        raw_output = query_ollama(args.ollama_url, args.model, entry["query"])
+        raw_output = query_chat_api(
+            api_base=args.api_base,
+            model=args.model,
+            query=entry["query"],
+            api_key=args.api_key,
+            timeout=args.timeout,
+        )
 
         parsed = parse_guard_output(raw_output)
         predicted = detect_pii(parsed)
