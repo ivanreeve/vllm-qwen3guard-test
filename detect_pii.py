@@ -74,7 +74,9 @@ def load_local_model(model_name, quantize_4bit=False):
         load_kwargs["quantization_config"] = BitsAndBytesConfig(
             load_in_4bit=True,
             bnb_4bit_compute_dtype="float16",
+            llm_int8_enable_fp32_cpu_offload=True,
         )
+        load_kwargs["max_memory"] = {0: "12GiB", "cpu": "24GiB"}
     else:
         load_kwargs["torch_dtype"] = "auto"
 
