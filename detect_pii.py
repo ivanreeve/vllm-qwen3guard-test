@@ -163,6 +163,28 @@ def setup_presidio():
             {"lang_code": "en", "model_name": "en_core_web_lg"},
             {"lang_code": "xx", "model_name": "xx_ent_wiki_sm"},
         ],
+        "ner_model_configuration": {
+            "labels_to_ignore": [
+                "CARDINAL",
+                "ORDINAL",
+                "PERCENT",
+                "MONEY",
+                "QUANTITY",
+                "EVENT",
+                "LANGUAGE",
+                "LAW",
+                "WORK_OF_ART",
+                "FAC",
+                "PRODUCT",
+                "MISC",
+                "GPE",
+                "LOC",
+                "ORG",
+                "NORP",
+                "DATE",
+                "TIME",
+            ],
+        },
     }
     provider = NlpEngineProvider(nlp_configuration=configuration)
     nlp_engine = provider.create_engine()
