@@ -75,8 +75,24 @@ def parse_args():
 
 
 # Entity types that indicate actual PII. We exclude LOCATION, DATE_TIME, NRP,
-# URL, and other generic types that cause false positives on banking/finance text.
+# URL, CRYPTO, and other generic types that cause false positives on banking/finance text.
+#
+# Built-in Presidio recognizers (verified against docs):
+#   Global: CREDIT_CARD, EMAIL_ADDRESS, IBAN_CODE, IP_ADDRESS, MEDICAL_LICENSE,
+#           PERSON, PHONE_NUMBER
+#   USA: US_BANK_NUMBER, US_DRIVER_LICENSE, US_ITIN, US_MBI, US_PASSPORT, US_SSN
+#   UK: UK_NHS, UK_NINO
+#   Spain: ES_NIF, ES_NIE
+#   Italy: IT_FISCAL_CODE, IT_DRIVER_LICENSE, IT_VAT_CODE, IT_PASSPORT, IT_IDENTITY_CARD
+#   Poland: PL_PESEL
+#   Singapore: SG_NRIC_FIN, SG_UEN
+#   Australia: AU_ABN, AU_ACN, AU_TFN, AU_MEDICARE
+#   India: IN_PAN, IN_AADHAAR, IN_VEHICLE_REGISTRATION, IN_VOTER, IN_PASSPORT, IN_GSTIN
+#   Finland: FI_PERSONAL_IDENTITY_CODE
+#   Korea: KR_DRIVER_LICENSE, KR_FRN, KR_PASSPORT, KR_BRN, KR_RRN
+#   Thailand: TH_TNIN
 PII_ENTITY_TYPES = {
+    # Global
     "PERSON",
     "EMAIL_ADDRESS",
     "PHONE_NUMBER",
@@ -84,25 +100,57 @@ PII_ENTITY_TYPES = {
     "IBAN_CODE",
     "IP_ADDRESS",
     "MEDICAL_LICENSE",
+    # USA
     "US_SSN",
     "US_BANK_NUMBER",
     "US_DRIVER_LICENSE",
+    "US_ITIN",
+    "US_MBI",
     "US_PASSPORT",
+    # UK
     "UK_NHS",
+    "UK_NINO",
+    # Spain
+    "ES_NIF",
+    "ES_NIE",
+    # Italy
+    "IT_FISCAL_CODE",
+    "IT_DRIVER_LICENSE",
+    "IT_VAT_CODE",
+    "IT_PASSPORT",
+    "IT_IDENTITY_CARD",
+    # Poland
+    "PL_PESEL",
+    # Singapore
+    "SG_NRIC_FIN",
+    "SG_UEN",
+    # Australia
     "AU_ABN",
     "AU_ACN",
     "AU_TFN",
     "AU_MEDICARE",
-    # Custom recognizers we add below
-    "SG_NRIC_FIN",
+    # India
+    "IN_PAN",
+    "IN_AADHAAR",
+    "IN_VEHICLE_REGISTRATION",
+    "IN_VOTER",
+    "IN_PASSPORT",
+    "IN_GSTIN",
+    # Finland
+    "FI_PERSONAL_IDENTITY_CODE",
+    # Korea
+    "KR_DRIVER_LICENSE",
+    "KR_FRN",
+    "KR_PASSPORT",
+    "KR_BRN",
+    "KR_RRN",
+    # Thailand
+    "TH_TNIN",
+    # Custom recognizers (no built-in support)
     "PH_TIN",
     "MY_IC",
-    "TH_NATIONAL_ID",
     "ID_KTP",
     "JP_MY_NUMBER",
-    "KR_RRN",
-    "IN_AADHAAR",
-    "IN_PAN",
 }
 
 # Minimum confidence score for a Presidio entity to count as PII.
@@ -110,17 +158,10 @@ PRESIDIO_SCORE_THRESHOLD = 0.4
 
 
 def _build_custom_recognizers():
-    """Build regex-based recognizers for APAC ID formats."""
+    """Build regex-based recognizers for APAC ID formats not built into Presidio."""
     from presidio_analyzer import Pattern, PatternRecognizer
 
     recognizers = []
-
-    # Singapore NRIC / FIN: [STFGM]\d{7}[A-Z]
-    recognizers.append(PatternRecognizer(
-        supported_entity="SG_NRIC_FIN",
-        patterns=[Pattern("SG_NRIC_FIN", r"\b[STFGM]\d{7}[A-Z]\b", 0.85)],
-        supported_language="en",
-    ))
 
     # Philippine TIN: 123-456-789-000
     recognizers.append(PatternRecognizer(
@@ -133,13 +174,6 @@ def _build_custom_recognizers():
     recognizers.append(PatternRecognizer(
         supported_entity="MY_IC",
         patterns=[Pattern("MY_IC", r"\b\d{6}-\d{2}-\d{4}\b", 0.8)],
-        supported_language="en",
-    ))
-
-    # Thai National ID: 1-1234-56789-01-2
-    recognizers.append(PatternRecognizer(
-        supported_entity="TH_NATIONAL_ID",
-        patterns=[Pattern("TH_NATIONAL_ID", r"\b\d-\d{4}-\d{5}-\d{2}-\d\b", 0.85)],
         supported_language="en",
     ))
 
@@ -157,35 +191,32 @@ def _build_custom_recognizers():
         supported_language="en",
     ))
 
-    # Korea RRN: 850615-1234567
-    recognizers.append(PatternRecognizer(
-        supported_entity="KR_RRN",
-        patterns=[Pattern("KR_RRN", r"\b\d{6}-\d{7}\b", 0.85)],
-        supported_language="en",
-    ))
-
-    # India Aadhaar: 2345 6789 0123 (12 digits with spaces)
-    recognizers.append(PatternRecognizer(
-        supported_entity="IN_AADHAAR",
-        patterns=[Pattern("IN_AADHAAR", r"\b\d{4}\s\d{4}\s\d{4}\b", 0.7)],
-        supported_language="en",
-    ))
-
-    # India PAN: ABCDE1234F
-    recognizers.append(PatternRecognizer(
-        supported_entity="IN_PAN",
-        patterns=[Pattern("IN_PAN", r"\b[A-Z]{5}\d{4}[A-Z]\b", 0.8)],
-        supported_language="en",
-    ))
-
     return recognizers
 
 
 def setup_presidio():
-    """Initialize Presidio AnalyzerEngine with custom APAC recognizers."""
-    from presidio_analyzer import AnalyzerEngine
+    """Initialize Presidio AnalyzerEngine with multi-language support and custom recognizers.
 
-    analyzer = AnalyzerEngine()
+    Uses en_core_web_lg for English and xx_ent_wiki_sm for all other languages
+    (Chinese, Japanese, Korean, Thai, Indonesian, etc.).
+    """
+    from presidio_analyzer import AnalyzerEngine
+    from presidio_analyzer.nlp_engine import NlpEngineProvider
+
+    configuration = {
+        "nlp_engine_name": "spacy",
+        "models": [
+            {"lang_code": "en", "model_name": "en_core_web_lg"},
+            {"lang_code": "xx", "model_name": "xx_ent_wiki_sm"},
+        ],
+    }
+    provider = NlpEngineProvider(nlp_configuration=configuration)
+    nlp_engine = provider.create_engine()
+
+    analyzer = AnalyzerEngine(
+        nlp_engine=nlp_engine,
+        supported_languages=["en", "xx"],
+    )
     for recognizer in _build_custom_recognizers():
         analyzer.registry.add_recognizer(recognizer)
     return analyzer
@@ -210,10 +241,20 @@ def _try_decode_base64(text):
     return None
 
 
+def _detect_non_english(text):
+    """Return True if text contains significant non-Latin characters."""
+    non_latin = sum(
+        1 for ch in text
+        if ord(ch) > 0x024F and not ch.isspace() and not ch.isdigit()
+    )
+    return non_latin > len(text) * 0.15
+
+
 def detect_pii_presidio(text, analyzer):
     """Run Presidio on the given text with entity-type filtering and score threshold.
 
-    Also attempts base64 decoding to catch encoded PII.
+    Scans in English, and additionally in multi-language mode (xx) if non-Latin
+    characters are detected. Also attempts base64 decoding to catch encoded PII.
     Returns (detected: bool, entities: list).
     """
     texts_to_scan = [text]
@@ -223,14 +264,20 @@ def detect_pii_presidio(text, analyzer):
     if decoded:
         texts_to_scan.append(decoded)
 
+    # Determine which languages to scan with
+    languages = ["en"]
+    if _detect_non_english(text):
+        languages.append("xx")
+
     all_entities = []
     for scan_text in texts_to_scan:
-        results = analyzer.analyze(
-            text=scan_text,
-            language="en",
-            entities=list(PII_ENTITY_TYPES),
-        )
-        all_entities.extend(results)
+        for lang in languages:
+            results = analyzer.analyze(
+                text=scan_text,
+                language=lang,
+                entities=list(PII_ENTITY_TYPES),
+            )
+            all_entities.extend(results)
 
     # Filter by score threshold
     filtered = [e for e in all_entities if e.score >= PRESIDIO_SCORE_THRESHOLD]
