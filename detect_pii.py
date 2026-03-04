@@ -429,9 +429,11 @@ def print_report(results, metrics, verbose=False, mode="qwen3guard"):
                 ])
             if mode in ("presidio", "combined"):
                 row.append("Yes" if r.get("presidio_detected") else "No")
+            flagged = ", ".join(r.get("flagged_by", [])) or "—"
             row.extend([
                 "Yes" if r["expected"] else "No",
                 "Yes" if r["predicted"] else "No",
+                flagged,
             ])
             query_rows.append(row)
 
@@ -439,7 +441,7 @@ def print_report(results, metrics, verbose=False, mode="qwen3guard"):
             headers.extend(["Safety", "Categories"])
         if mode in ("presidio", "combined"):
             headers.append("Presidio")
-        headers.extend(["Exp", "Pred"])
+        headers.extend(["Exp", "Pred", "Flagged By"])
 
         print(tabulate(query_rows, headers=headers, tablefmt="grid"))
 
@@ -598,6 +600,13 @@ def main():
         else:
             predicted = qwen_detected
 
+        # Determine which component(s) flagged PII
+        flagged_by = []
+        if qwen_detected:
+            flagged_by.append("qwen3guard")
+        if presidio_detected:
+            flagged_by.append("presidio")
+
         result = {
             "id": entry["id"],
             "query": entry["query"],
@@ -606,6 +615,7 @@ def main():
             "pii_type": entry.get("pii_type", "none"),
             "expected": entry["contains_pii"],
             "predicted": predicted,
+            "flagged_by": flagged_by,
             "raw_output": raw_output,
             "parsed": parsed,
             "parse_error": parse_error,
