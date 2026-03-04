@@ -75,24 +75,16 @@ def parse_args():
 
 
 # Entity types that indicate actual PII. We exclude LOCATION, DATE_TIME, NRP,
-# URL, CRYPTO, and other generic types that cause false positives on banking/finance text.
+# URL, CRYPTO, MAC_ADDRESS and other generic types that cause false positives
+# on banking/finance text.
 #
-# Built-in Presidio recognizers (verified against docs):
-#   Global: CREDIT_CARD, EMAIL_ADDRESS, IBAN_CODE, IP_ADDRESS, MEDICAL_LICENSE,
-#           PERSON, PHONE_NUMBER
-#   USA: US_BANK_NUMBER, US_DRIVER_LICENSE, US_ITIN, US_MBI, US_PASSPORT, US_SSN
-#   UK: UK_NHS, UK_NINO
-#   Spain: ES_NIF, ES_NIE
-#   Italy: IT_FISCAL_CODE, IT_DRIVER_LICENSE, IT_VAT_CODE, IT_PASSPORT, IT_IDENTITY_CARD
-#   Poland: PL_PESEL
-#   Singapore: SG_NRIC_FIN, SG_UEN
-#   Australia: AU_ABN, AU_ACN, AU_TFN, AU_MEDICARE
-#   India: IN_PAN, IN_AADHAAR, IN_VEHICLE_REGISTRATION, IN_VOTER, IN_PASSPORT, IN_GSTIN
-#   Finland: FI_PERSONAL_IDENTITY_CODE
-#   Korea: KR_DRIVER_LICENSE, KR_FRN, KR_PASSPORT, KR_BRN, KR_RRN
-#   Thailand: TH_TNIN
+# Only entities with built-in recognizers registered for language "en" are
+# included.  Country-specific recognizers (AU, IN, SG, KR, IT, ES, PL, FI, TH)
+# are NOT registered for "en" by default in Presidio — requesting them produces
+# noisy warnings every iteration and they never match.  Our custom regex
+# recognizers (registered for "en") cover the APAC formats we care about.
 PII_ENTITY_TYPES = {
-    # Global
+    # Global — have "en" recognizers
     "PERSON",
     "EMAIL_ADDRESS",
     "PHONE_NUMBER",
@@ -100,53 +92,15 @@ PII_ENTITY_TYPES = {
     "IBAN_CODE",
     "IP_ADDRESS",
     "MEDICAL_LICENSE",
-    # USA
+    # USA — have "en" recognizers
     "US_SSN",
     "US_BANK_NUMBER",
     "US_DRIVER_LICENSE",
     "US_ITIN",
-    "US_MBI",
     "US_PASSPORT",
-    # UK
+    # UK — have "en" recognizers
     "UK_NHS",
-    "UK_NINO",
-    # Spain
-    "ES_NIF",
-    "ES_NIE",
-    # Italy
-    "IT_FISCAL_CODE",
-    "IT_DRIVER_LICENSE",
-    "IT_VAT_CODE",
-    "IT_PASSPORT",
-    "IT_IDENTITY_CARD",
-    # Poland
-    "PL_PESEL",
-    # Singapore
-    "SG_NRIC_FIN",
-    "SG_UEN",
-    # Australia
-    "AU_ABN",
-    "AU_ACN",
-    "AU_TFN",
-    "AU_MEDICARE",
-    # India
-    "IN_PAN",
-    "IN_AADHAAR",
-    "IN_VEHICLE_REGISTRATION",
-    "IN_VOTER",
-    "IN_PASSPORT",
-    "IN_GSTIN",
-    # Finland
-    "FI_PERSONAL_IDENTITY_CODE",
-    # Korea
-    "KR_DRIVER_LICENSE",
-    "KR_FRN",
-    "KR_PASSPORT",
-    "KR_BRN",
-    "KR_RRN",
-    # Thailand
-    "TH_TNIN",
-    # Custom recognizers (no built-in support)
+    # Custom recognizers we register for "en"
     "PH_TIN",
     "MY_IC",
     "ID_KTP",
@@ -272,11 +226,20 @@ def detect_pii_presidio(text, analyzer):
     all_entities = []
     for scan_text in texts_to_scan:
         for lang in languages:
-            results = analyzer.analyze(
-                text=scan_text,
-                language=lang,
-                entities=list(PII_ENTITY_TYPES),
-            )
+            if lang == "en":
+                # Use our curated whitelist for English
+                results = analyzer.analyze(
+                    text=scan_text,
+                    language=lang,
+                    entities=list(PII_ENTITY_TYPES),
+                )
+            else:
+                # For multi-language (xx), only look for PERSON via NER
+                results = analyzer.analyze(
+                    text=scan_text,
+                    language=lang,
+                    entities=["PERSON"],
+                )
             all_entities.extend(results)
 
     # Filter by score threshold
