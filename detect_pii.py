@@ -7,6 +7,7 @@ import json
 import os
 import re
 import sys
+import time
 from pathlib import Path
 
 from tabulate import tabulate
@@ -399,11 +400,15 @@ def compute_metrics(results):
         else 0
     )
 
+    latencies = [r["latency_ms"] for r in results if r.get("latency_ms") is not None]
+    avg_latency_ms = sum(latencies) / len(latencies) if latencies else None
+
     return {
         "accuracy": accuracy,
         "precision": precision,
         "recall": recall,
         "f1": f1,
+        "avg_latency_ms": avg_latency_ms,
         "confusion_matrix": {"tp": tp, "fp": fp, "fn": fn, "tn": tn},
     }
 
@@ -458,6 +463,8 @@ def print_report(results, metrics, verbose=False, mode="qwen3guard"):
         ["Recall", f"{metrics['recall']:.3f}"],
         ["F1 Score", f"{metrics['f1']:.3f}"],
     ]
+    if metrics.get("avg_latency_ms") is not None:
+        metrics_table.append(["Avg Latency (ms)", f"{metrics['avg_latency_ms']:.1f}"])
     print(tabulate(metrics_table, headers=["Metric", "Value"], tablefmt="grid"))
 
     # Confusion matrix
@@ -567,9 +574,11 @@ def main():
         qwen_detected = False
         presidio_detected = False
         parse_error = False
+        latency_ms = None
 
         # Qwen3Guard inference
         if use_model:
+            t0 = time.perf_counter()
             if args.local:
                 raw_output = query_local_model(
                     local_model, local_tokenizer, entry["query"]
@@ -582,6 +591,7 @@ def main():
                     api_key=args.api_key,
                     timeout=args.timeout,
                 )
+            latency_ms = (time.perf_counter() - t0) * 1000
             parsed = parse_guard_output(raw_output)
             qwen_detected = detect_pii(parsed)
             parse_error = parsed["safety"] is None
@@ -621,6 +631,7 @@ def main():
             "parse_error": parse_error,
             "presidio_detected": presidio_detected,
             "qwen_detected": qwen_detected,
+            "latency_ms": latency_ms,
         }
         if presidio_analyzer is not None:
             result["presidio_entities"] = [
