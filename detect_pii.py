@@ -29,6 +29,25 @@ def parse_args():
         help="Run inference locally via transformers instead of calling an API",
     )
     parser.add_argument(
+        "--mlx",
+        action="store_true",
+        help="Run inference locally via mlx-lm (Apple Silicon). "
+             "Implies --local. Model should be an MLX-format model "
+             "(e.g. mlx-community/gemma-3-4b-it-4bit)",
+    )
+    parser.add_argument(
+        "--mlx-max-tokens",
+        type=int,
+        default=128,
+        help="Max tokens to generate with MLX (default: 128)",
+    )
+    parser.add_argument(
+        "--guard-format",
+        action="store_true",
+        help="Model outputs Qwen3Guard-style Safety/Categories/Refusal format. "
+             "If not set, uses a PII-detection system prompt and parses yes/no answers.",
+    )
+    parser.add_argument(
         "--api-base",
         default="http://localhost:8000/v1",
         help="OpenAI-compatible API base URL (default: http://localhost:8000/v1)",
@@ -268,6 +287,46 @@ def detect_pii_presidio(text, analyzer):
     # Filter by score threshold
     filtered = [e for e in all_entities if e.score >= PRESIDIO_SCORE_THRESHOLD]
     return len(filtered) > 0, filtered
+
+
+PII_DETECTION_SYSTEM_PROMPT = """\
+You are a PII (Personally Identifiable Information) detection system.
+Analyze the following text and determine if it contains PII.
+
+PII includes: names, email addresses, phone numbers, ID numbers (SSN, NRIC, \
+passport, driver's license, TIN, KTP, My Number), bank account numbers, \
+credit card numbers, IP addresses, medical license numbers, or any other \
+information that can identify a specific individual.
+
+Respond in EXACTLY this format (no other text):
+Safety: [Safe or Unsafe]
+Categories: [none or PII]
+Refusal: No"""
+
+
+def load_mlx_model(model_name):
+    """Load model and tokenizer for MLX inference on Apple Silicon."""
+    from mlx_lm import load
+
+    print(f"Loading {model_name} via mlx-lm...")
+    model, tokenizer = load(model_name)
+    print("Model loaded.")
+    return model, tokenizer
+
+
+def query_mlx_model(model, tokenizer, query, max_tokens=128, system_prompt=None):
+    """Run inference via mlx-lm."""
+    from mlx_lm import generate
+
+    messages = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    messages.append({"role": "user", "content": query})
+
+    prompt = tokenizer.apply_chat_template(
+        messages, tokenize=False, add_generation_prompt=True
+    )
+    return generate(model, tokenizer, prompt=prompt, max_tokens=max_tokens, verbose=False)
 
 
 def load_local_model(model_name, quantize_4bit=False):
@@ -554,9 +613,20 @@ def main():
     # Set up model inference if needed
     local_model = None
     local_tokenizer = None
+    mlx_model = None
+    mlx_tokenizer = None
     use_model = mode in ("qwen3guard", "combined")
+
+    # Determine if model natively outputs guard format or needs a system prompt
+    use_guard_format = args.guard_format or (
+        not args.mlx and "guard" in args.model.lower()
+    )
+
     if use_model:
-        if args.local:
+        if args.mlx:
+            mlx_model, mlx_tokenizer = load_mlx_model(args.model)
+            print(f"Using model: {args.model} (MLX, guard_format={use_guard_format})")
+        elif args.local:
             local_model, local_tokenizer = load_local_model(
                 args.model, quantize_4bit=args.quantize_4bit
             )
@@ -576,10 +646,17 @@ def main():
         parse_error = False
         latency_ms = None
 
-        # Qwen3Guard inference
+        # Model inference
         if use_model:
+            sys_prompt = None if use_guard_format else PII_DETECTION_SYSTEM_PROMPT
             t0 = time.perf_counter()
-            if args.local:
+            if args.mlx:
+                raw_output = query_mlx_model(
+                    mlx_model, mlx_tokenizer, entry["query"],
+                    max_tokens=args.mlx_max_tokens,
+                    system_prompt=sys_prompt,
+                )
+            elif args.local:
                 raw_output = query_local_model(
                     local_model, local_tokenizer, entry["query"]
                 )
