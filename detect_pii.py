@@ -31,9 +31,9 @@ def parse_args():
     parser.add_argument(
         "--mlx",
         action="store_true",
-        help="Run inference locally via mlx-lm (Apple Silicon). "
-             "Implies --local. Model should be an MLX-format model "
-             "(e.g. mlx-community/gemma-3-4b-it-4bit)",
+        help="Run inference locally via mlx-vlm (Apple Silicon). "
+             "Model should be an MLX-format model "
+             "(e.g. mlx-community/gemma-4-e4b-it-4bit)",
     )
     parser.add_argument(
         "--mlx-max-tokens",
@@ -305,28 +305,30 @@ Refusal: No"""
 
 
 def load_mlx_model(model_name):
-    """Load model and tokenizer for MLX inference on Apple Silicon."""
-    from mlx_lm import load
+    """Load model and processor for MLX inference on Apple Silicon (via mlx-vlm)."""
+    from mlx_vlm import load
 
-    print(f"Loading {model_name} via mlx-lm...")
-    model, tokenizer = load(model_name)
+    print(f"Loading {model_name} via mlx-vlm...")
+    model, processor = load(model_name)
     print("Model loaded.")
-    return model, tokenizer
+    return model, processor
 
 
-def query_mlx_model(model, tokenizer, query, max_tokens=128, system_prompt=None):
-    """Run inference via mlx-lm."""
-    from mlx_lm import generate
+def query_mlx_model(model, processor, query, max_tokens=128, system_prompt=None):
+    """Run inference via mlx-vlm (text-only, no image)."""
+    from mlx_vlm import generate
 
     messages = []
     if system_prompt:
         messages.append({"role": "system", "content": system_prompt})
     messages.append({"role": "user", "content": query})
 
-    prompt = tokenizer.apply_chat_template(
+    prompt = processor.apply_chat_template(
         messages, tokenize=False, add_generation_prompt=True
     )
-    return generate(model, tokenizer, prompt=prompt, max_tokens=max_tokens, verbose=False)
+    result = generate(model, processor, prompt, max_tokens=max_tokens, verbose=False)
+    # mlx-vlm returns a GenerationResult object; extract the text
+    return result.text if hasattr(result, "text") else str(result)
 
 
 def load_local_model(model_name, quantize_4bit=False):
