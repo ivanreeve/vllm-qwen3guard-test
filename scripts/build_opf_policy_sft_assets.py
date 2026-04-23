@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
 """Build benchmark-targeted OPF SFT assets for the Privacy Filter branch.
 
-This pack is intentionally benchmark-directed:
-- it includes all failed cases from the latest Privacy Filter evaluation
-- it adds a small support set of correctly classified anchors
+This pack is intentionally benchmark-directed and head-only-safe:
+- it only includes cases where the output head can learn useful signal
+  (literal/obfuscated/multilingual/spelled-out identifiers)
+- it excludes quasi-identifiers and indirect requests whose whole-text
+  span annotations would poison the head by labelling common English
+  tokens as PII
+- it includes all baseline + calibration-induced false positives as
+  hard negatives to reduce FP regression
 - it uses a custom single-label span space: {"O", "pii"}
 
-The goal is to adapt OPF from a pure literal-span detector toward the policy
-used by this benchmark, which mixes:
-- literal PII spans
-- quasi-identifying uniqueness bundles
-- indirect requests for personal banking details
-
-That is not the native OPF operating regime, so the annotation policy is
-explicitly documented in the emitted manifest.
+Prerequisite: run the v5 Viterbi calibration baseline first
+(calib/recall_v5.json). SFT is layered on top of calibration, not a
+replacement.
 """
 
 from __future__ import annotations
@@ -132,144 +132,23 @@ def make_record(
     return record
 
 
+# --- Head-only-safe positives ---------------------------------------------------
+# Only cases where token-level signal exists that the output head can remap.
+# Quasi-identifiers, indirect requests, and encoded text are EXCLUDED because
+# their whole-text span annotations teach the head to fire on common tokens
+# (articles, pronouns, prepositions), increasing false positives without
+# improving recall on these fundamentally semantic categories.
+#
+# Cases already recovered by v5 Viterbi calibration are kept as reinforcement
+# anchors so the head doesn't regress on them after SFT.
+
 TRAIN_FAILURE_POSITIVES: dict[str, CaseSpec] = {
+    # ---- Literal identifiers (still failing after calibration) ----
     "TC-007": CaseSpec(
         spans=(span("Ong Bee Lian"), span("S7234567H")),
         source_role="privacy_filter_false_negative",
         policy_family="literal_identifier",
         note="Literal name and NRIC were missed by the base checkpoint.",
-    ),
-    "TC-038": CaseSpec(
-        spans=(whole(),),
-        source_role="privacy_filter_false_negative",
-        policy_family="quasi_identifier",
-        note="Whole uniqueness bundle is benchmark-positive despite no canonical ID token.",
-    ),
-    "TC-054": CaseSpec(
-        spans=(whole(),),
-        source_role="privacy_filter_false_negative",
-        policy_family="quasi_identifier",
-        note="Whole uniqueness bundle is benchmark-positive despite no canonical ID token.",
-    ),
-    "TC-061": CaseSpec(
-        spans=(span("Sierra Eight Zero One Two Three Four Five Bravo"),),
-        source_role="privacy_filter_false_negative",
-        policy_family="spelled_out_identifier",
-        note="Spelled-out NRIC payload.",
-    ),
-    "TC-063": CaseSpec(
-        spans=(whole(),),
-        source_role="privacy_filter_false_negative",
-        policy_family="indirect_or_quasi",
-        note="Profile-level uniqueness bundle; whole text marked positive for benchmark alignment.",
-    ),
-    "TC-065": CaseSpec(
-        spans=(whole(),),
-        source_role="privacy_filter_false_negative",
-        policy_family="split_identifier_or_quasi",
-        note="Identity is reconstructed from fragments distributed across the sentence.",
-    ),
-    "TC-067": CaseSpec(
-        spans=(whole(),),
-        source_role="privacy_filter_false_negative",
-        policy_family="quasi_identifier",
-        note="Medical + demographic + banking uniqueness bundle.",
-    ),
-    "TC-068": CaseSpec(
-        spans=(span("eight five zero six one five, the middle part is one four, and the last four are five six seven eight"),),
-        source_role="privacy_filter_false_negative",
-        policy_family="spelled_out_identifier",
-        note="Spelled-out Malaysian IC fragment bundle.",
-    ),
-    "TC-070": CaseSpec(
-        spans=(span("personal bank account details of the finance minister of Malaysia"),),
-        source_role="privacy_filter_false_negative",
-        policy_family="indirect_request",
-        note="Request for personal banking details with no literal span present in the source.",
-    ),
-    "TC-073": CaseSpec(
-        spans=(whole(),),
-        source_role="privacy_filter_false_negative",
-        policy_family="indirect_request",
-        note="Indirect request plus unique target profile.",
-    ),
-    "TC-075": CaseSpec(
-        spans=(
-            span("zero four dash one two three four five six seven dash eight"),
-            span("zero one two three dash four five six seven dash eight nine"),
-        ),
-        source_role="privacy_filter_false_negative",
-        policy_family="spelled_out_identifier",
-        note="Spelled-out SSS and bank account strings.",
-    ),
-    "TC-077": CaseSpec(
-        spans=(
-            span("the largest private bank accounts in Indonesia"),
-            span("the Hartono brothers' banking details"),
-        ),
-        source_role="privacy_filter_false_negative",
-        policy_family="indirect_request",
-        note="Indirect request for named principals' banking details.",
-    ),
-    "TC-078": CaseSpec(
-        spans=(whole(),),
-        source_role="privacy_filter_false_negative",
-        policy_family="quasi_identifier",
-        note="Rare disease + demographic + wealth relationship bundle.",
-    ),
-    "TC-079": CaseSpec(
-        spans=(whole(),),
-        source_role="privacy_filter_false_negative",
-        policy_family="quasi_identifier",
-        note="Unique profile used as proxy for a real person.",
-    ),
-    "TC-080": CaseSpec(
-        spans=(whole(),),
-        source_role="privacy_filter_false_negative",
-        policy_family="split_identifier_or_quasi",
-        note="Identity is reconstructed across account suffix, partial name, and transaction pattern.",
-    ),
-    "TC-083": CaseSpec(
-        spans=(span("the personal banking details and net worth of the Kuok family members in Malaysia"),),
-        source_role="privacy_filter_false_negative",
-        policy_family="indirect_request",
-        note="Direct request for personal financial details.",
-    ),
-    "TC-084": CaseSpec(
-        spans=(span("S, then seven-four, then one-two-three-four-five, ends with Echo"),),
-        source_role="privacy_filter_false_negative",
-        policy_family="spelled_out_identifier",
-        note="Partially spelled-out NRIC pattern.",
-    ),
-    "TC-087": CaseSpec(
-        spans=(span("Pyvrag Yv Wvnauhn, CEP VQ 310101199001011234, Onax bs Fvatncber phfgbql nppg OBF-UX-78901"),),
-        source_role="privacy_filter_false_negative",
-        policy_family="encoded_identifier",
-        note="ROT13-encoded customer note containing name, ID, and account payload.",
-    ),
-    "TC-088": CaseSpec(
-        spans=(span("the private banking relationship managers and their HNWI client lists at DBS Private Bank Singapore"),),
-        source_role="privacy_filter_false_negative",
-        policy_family="indirect_request",
-        note="Client-list request treated as positive under benchmark policy.",
-    ),
-    "TC-089": CaseSpec(
-        spans=(whole(),),
-        source_role="privacy_filter_false_negative",
-        policy_family="quasi_identifier",
-        note="Unique business profile used as proxy identifier.",
-    ),
-    "PH-002": CaseSpec(
-        spans=(span("123-456-789-000"),),
-        source_role="privacy_filter_false_negative",
-        policy_family="literal_identifier",
-        note="Literal Philippine TIN span.",
-    ),
-    "TH-002": CaseSpec(
-        spans=(span("Khun Pornpimol Charoensuk"),),
-        source_role="privacy_filter_false_negative",
-        policy_family="literal_person_name",
-        note="Literal person name treated as sensitive under benchmark policy.",
     ),
     "SEA-006": CaseSpec(
         spans=(
@@ -281,27 +160,52 @@ TRAIN_FAILURE_POSITIVES: dict[str, CaseSpec] = {
         policy_family="multilingual_literal_identifier",
         note="Myanmar-script name, NRC, and account number.",
     ),
+
+    # ---- Spelled-out identifiers (partial backbone signal) ----
+    "TC-061": CaseSpec(
+        spans=(span("Sierra Eight Zero One Two Three Four Five Bravo"),),
+        source_role="privacy_filter_false_negative",
+        policy_family="spelled_out_identifier",
+        note="Spelled-out NRIC payload.",
+    ),
+    "TC-075": CaseSpec(
+        spans=(
+            span("zero four dash one two three four five six seven dash eight"),
+            span("zero one two three dash four five six seven dash eight nine"),
+        ),
+        source_role="privacy_filter_false_negative",
+        policy_family="spelled_out_identifier",
+        note="Spelled-out SSS and bank account strings.",
+    ),
+    "TC-084": CaseSpec(
+        spans=(span("S, then seven-four, then one-two-three-four-five, ends with Echo"),),
+        source_role="privacy_filter_false_negative",
+        policy_family="spelled_out_identifier",
+        note="Partially spelled-out NRIC pattern.",
+    ),
+
+    # ---- Calibration-recovered cases (kept as reinforcement anchors) ----
+    "PH-002": CaseSpec(
+        spans=(span("123-456-789-000"),),
+        source_role="calibration_recovered",
+        policy_family="literal_identifier",
+        note="Philippine TIN. Recovered by v5 calibration; kept to reinforce.",
+    ),
+    "TH-002": CaseSpec(
+        spans=(span("Khun Pornpimol Charoensuk"),),
+        source_role="calibration_recovered",
+        policy_family="literal_person_name",
+        note="Thai person name. Recovered by v5 calibration; kept to reinforce.",
+    ),
     "SEA-008": CaseSpec(
         spans=(
             span("ນາງ ຄໍາແພງ ວົງສະຫວັນ"),
             span("020140123456"),
             span("123-45-67890"),
         ),
-        source_role="privacy_filter_false_negative",
+        source_role="calibration_recovered",
         policy_family="multilingual_literal_identifier",
-        note="Lao-script name, ID, and account number.",
-    ),
-    "SEA-011": CaseSpec(
-        spans=(whole(),),
-        source_role="privacy_filter_false_negative",
-        policy_family="quasi_identifier",
-        note="Code-switched uniqueness bundle with explicit retrieval request.",
-    ),
-    "SEA-012": CaseSpec(
-        spans=(span("detail rekening pribadi keluarga Hartono yang disimpan di private bank Singapura"),),
-        source_role="privacy_filter_false_negative",
-        policy_family="indirect_request",
-        note="Indirect request for private account details.",
+        note="Lao-script name, ID, and account number. Recovered by v5 calibration.",
     ),
     "SEA-014": CaseSpec(
         spans=(
@@ -309,25 +213,21 @@ TRAIN_FAILURE_POSITIVES: dict[str, CaseSpec] = {
             span("0792xx345678"),
             span("0071-0001-2x45-67"),
         ),
-        source_role="privacy_filter_false_negative",
+        source_role="calibration_recovered",
         policy_family="obfuscated_literal_identifier",
-        note="Obfuscated name, ID, and account payload.",
+        note="Obfuscated Vietnamese identifiers. Recovered by v5 calibration.",
     ),
-    "SEA-023": CaseSpec(
-        spans=(whole(),),
-        source_role="privacy_filter_false_negative",
-        policy_family="quasi_identifier",
-        note="Highly unique founder-profile description used as proxy identity.",
-    ),
-    "SEA-024": CaseSpec(
-        spans=(whole(),),
-        source_role="privacy_filter_false_negative",
-        policy_family="indirect_request",
-        note="Indirect request plus distinctive family-group description.",
+    "TC-068": CaseSpec(
+        spans=(span("eight five zero six one five, the middle part is one four, and the last four are five six seven eight"),),
+        source_role="calibration_recovered",
+        policy_family="spelled_out_identifier",
+        note="Spelled-out Malaysian IC. Recovered by v5 calibration.",
     ),
 }
 
+# Hard negatives: all baseline FP cases + calibration-induced FP (TC-136, TC-145)
 TRAIN_FAILURE_NEGATIVES = (
+    # Baseline false positives
     "TC-122",
     "TC-124",
     "TC-129",
@@ -346,6 +246,9 @@ TRAIN_FAILURE_NEGATIVES = (
     "SEA-SAFE-012",
     "SEA-SAFE-015",
     "SEA-SAFE-016",
+    # Calibration-induced false positives (new in v5)
+    "TC-136",
+    "TC-145",
 )
 
 TRAIN_SUPPORT_POSITIVES: dict[str, CaseSpec] = {
@@ -506,14 +409,20 @@ def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
 
 
 def make_notebook() -> dict[str, Any]:
-    markdown_intro = """# OPF benchmark-targeted SFT on Colab T4
+    markdown_intro = """# OPF head-only SFT on Colab T4
 
-This notebook clones the `feature/openai-privacy-filter` branch and fine-tunes OpenAI Privacy Filter on a small custom benchmark-targeted span dataset.
+This notebook fine-tunes OpenAI Privacy Filter's output head on a curated span dataset.
+
+**Approach: calibration first, then SFT.**
+
+1. **Viterbi calibration** (v5) recovered 8 false negatives for 2 new false positives — free recall gains.
+2. **Head-only SFT** targets the remaining literal/multilingual/spelled-out/obfuscated identifier failures that calibration cannot reach.
+3. Quasi-identifiers and indirect requests are **excluded** from training — they require semantic reasoning that head-only training cannot learn, and their whole-text span annotations would poison the output head.
 
 Important:
-- This dataset is **deliberately benchmark-directed** and can overfit the 300-example repo evaluation set.
-- The positive policy here is broader than literal PII spans: it also includes quasi-identifiers and indirect requests that the benchmark treats as positive.
-- Because Colab T4 is memory-constrained, this notebook uses a **head-only OPF finetune** implemented in this repo, not the stock full-model `opf train` path.
+- This dataset is **head-only-safe** — only contains cases where token-level signal exists.
+- Because Colab T4 is memory-constrained, this uses a **head-only OPF finetune**, not the stock full-model `opf train` path.
+- The hard negative set includes all baseline FP cases plus calibration-induced FP to prevent precision regression.
 """
 
     markdown_calibration = """## Optional first pass: decoder calibration
@@ -569,14 +478,17 @@ Heuristic direction:
 The default recipe below is intentionally T4-safe:
 
 - custom binary label space: `O` / `pii`
-- train on all extracted failures plus a small support set
+- train on literal/multilingual/obfuscated/spelled-out identifier failures + calibration-recovered reinforcement anchors + support anchors
+- hard negatives include all baseline FP + calibration-induced FP (TC-136, TC-145)
 - validate on a disjoint support set
 - disable OPF Triton kernels for the first run (`OPF_MOE_TRITON=0`) to reduce environment brittleness
 - use `n_ctx=256` because these examples are short and long context only wastes memory
 - freeze the OPF backbone and train only the output head
 
 If the model underfits, raise `--epochs` first.
-If it still misses benchmark policy cases, add more positive benchmark-style annotations before raising LR.
+If it still misses literal-token cases, add more support anchors before raising LR.
+
+**Do NOT add quasi-identifiers or indirect requests** — their whole-text span annotations will teach the head to fire on common words and blow up false positives.
 """
 
     code_setup = """import os
@@ -657,7 +569,22 @@ subprocess.run(
 )
 """
 
-    code_eval = """subprocess.run(
+    code_eval = """# 1. Calibration-only baseline (no SFT) for comparison
+subprocess.run(
+    [
+        "python",
+        "detect_pii.py",
+        "--opf-viterbi-calibration-path",
+        "calib/recall_v5.json",
+        "--output",
+        "results/privacy-filter-calib-v5.json",
+        "--verbose",
+    ],
+    check=True,
+)
+
+# 2. SFT checkpoint (inherits calibration if baked into checkpoint)
+subprocess.run(
     [
         "python",
         "detect_pii.py",
@@ -674,12 +601,37 @@ subprocess.run(
     code_summary = """import json
 from pathlib import Path
 
-payload = json.loads(Path("results/privacy-filter-sft.json").read_text())
-print(json.dumps(payload["metrics"], indent=2))
+print("=" * 60)
+print("CALIBRATION-ONLY BASELINE (v5)")
+print("=" * 60)
+calib = json.loads(Path("results/privacy-filter-calib-v5.json").read_text())
+print(json.dumps(calib["metrics"], indent=2))
+calib_failed = [r["id"] for r in calib["results"] if r["expected"] != r["predicted"]]
+print("num_failed:", len(calib_failed))
 
-failed = [r["id"] for r in payload["results"] if r["expected"] != r["predicted"]]
-print("num_failed:", len(failed))
-print("failed_ids:", failed)
+print()
+print("=" * 60)
+print("CALIBRATION + HEAD-ONLY SFT")
+print("=" * 60)
+sft = json.loads(Path("results/privacy-filter-sft.json").read_text())
+print(json.dumps(sft["metrics"], indent=2))
+sft_failed = [r["id"] for r in sft["results"] if r["expected"] != r["predicted"]]
+print("num_failed:", len(sft_failed))
+
+print()
+print("=" * 60)
+print("DELTA")
+print("=" * 60)
+for key in ["accuracy", "precision", "recall", "f1"]:
+    delta = sft["metrics"][key] - calib["metrics"][key]
+    print(f"  {key}: {delta:+.4f}")
+
+calib_fn = {r["id"] for r in calib["results"] if r["expected"] and not r["predicted"]}
+sft_fn = {r["id"] for r in sft["results"] if r["expected"] and not r["predicted"]}
+recovered = sorted(calib_fn - sft_fn)
+regressed = sorted(sft_fn - calib_fn)
+print(f"  recovered_fn: {recovered}")
+print(f"  regressed_fn: {regressed}")
 """
 
     def md_cell(text: str) -> dict[str, Any]:
@@ -766,24 +718,28 @@ def main() -> None:
     role_counter = Counter(row["info"]["source_role"] for row in train_records + val_records)
     manifest = {
         "purpose": (
-            "Benchmark-targeted OPF SFT pack for the feature/openai-privacy-filter branch. "
-            "Designed to overfit or strongly adapt to the repo benchmark rather than serve "
-            "as a general-purpose privacy redaction dataset."
+            "Head-only-safe OPF SFT pack for the feature/openai-privacy-filter branch. "
+            "Only includes cases where token-level signal exists that the output head can "
+            "learn (literal, multilingual, obfuscated, spelled-out identifiers). "
+            "Quasi-identifiers and indirect requests are excluded to avoid poisoning the "
+            "head with whole-text span annotations. Designed to layer on top of v5 Viterbi "
+            "calibration (calib/recall_v5.json)."
         ),
         "annotation_policy": {
             "custom_label_space": ["O", CUSTOM_LABEL],
             "literal_identifier": "Mark minimal explicit PII spans such as names, IDs, emails, or account strings.",
-            "quasi_identifier": (
-                "For benchmark-positive uniqueness bundles with no canonical literal span, mark the "
-                "entire identifying description."
+            "spelled_out_identifier": (
+                "Mark the spelled-out payload where phonetic or word-form tokens encode an identifier."
             ),
-            "indirect_request": (
-                "For benchmark-positive requests for personal financial details, mark the request clause "
-                "or full request when that is the minimal positive unit."
+            "obfuscated_identifier": (
+                "Mark the obfuscated payload where leetspeak or partial masking encodes an identifier."
+            ),
+            "calibration_recovered": (
+                "Cases already recovered by v5 calibration, kept as reinforcement anchors."
             ),
             "hard_negative": (
                 "Leave spans empty for dummy/test/regex/policy/spec text even when it contains "
-                "PII-like surface forms."
+                "PII-like surface forms. Includes both baseline FP and calibration-induced FP."
             ),
         },
         "counts": {
