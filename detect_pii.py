@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Evaluate Qwen3Guard's PII detection capabilities."""
+"""Evaluate PII detection models on the bundled test dataset."""
 
 import argparse
 import base64
@@ -16,12 +16,12 @@ from tqdm import tqdm
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Test Qwen3Guard PII detection via API or local transformers inference"
+        description="Test PII detection via API or local model inference"
     )
     parser.add_argument(
         "--model",
         default="Qwen/Qwen3Guard-Gen-4B",
-        help="Model name (default: Qwen/Qwen3Guard-Gen-4B)",
+        help="Model name or path (default: Qwen/Qwen3Guard-Gen-4B)",
     )
     parser.add_argument(
         "--local",
@@ -89,7 +89,7 @@ def parse_args():
     mode.add_argument(
         "--combined",
         action="store_true",
-        help="Use Presidio + Qwen3Guard combined detection (logical OR)",
+        help="Use Presidio + model combined detection (logical OR)",
     )
     return parser.parse_args()
 
@@ -359,6 +359,30 @@ Categories: PII
 Refusal: No"""
 
 
+def is_privacy_filter_model(model_name):
+    return "privacy-filter" in model_name.lower()
+
+
+def pick_torch_device():
+    try:
+        import torch
+    except ImportError:
+        return "cpu"
+    return "cuda" if torch.cuda.is_available() else "cpu"
+
+
+def load_privacy_filter_model(model_name):
+    """Load OpenAI Privacy Filter via the OPF runtime."""
+    from opf import OPF
+
+    device = pick_torch_device()
+    checkpoint = None if model_name.lower() == "openai/privacy-filter" else model_name
+    print(f"Loading {model_name} via OPF on {device}...")
+    redactor = OPF(model=checkpoint, device=device, output_mode="typed")
+    print("OPF runtime configured.")
+    return redactor, device
+
+
 def load_mlx_model(model_name):
     """Load model and processor for MLX inference on Apple Silicon (via mlx-vlm)."""
     from mlx_vlm import load
@@ -419,6 +443,12 @@ def query_local_model(model, tokenizer, query):
     generated_ids = model.generate(**model_inputs, max_new_tokens=128)
     output_ids = generated_ids[0][len(model_inputs.input_ids[0]):].tolist()
     return tokenizer.decode(output_ids, skip_special_tokens=True)
+
+
+def query_privacy_filter_model(redactor, query):
+    """Run inference via the OPF runtime and return structured output."""
+    result = redactor.redact(query)
+    return result.to_dict()
 
 
 def query_chat_api(api_base, model, query, api_key="", timeout=120):
@@ -486,7 +516,27 @@ def parse_guard_output(text):
     return result
 
 
-def detect_pii(parsed):
+def parse_privacy_filter_output(payload):
+    """Normalize OPF output to the evaluator's parsed-result shape."""
+    detected_spans = payload.get("detected_spans", [])
+    categories = sorted(
+        {
+            span.get("label", "unknown")
+            for span in detected_spans
+            if isinstance(span, dict) and span.get("label")
+        }
+    )
+    return {
+        "safety": "unsafe" if detected_spans else "safe",
+        "categories": ", ".join(categories) if categories else "none",
+        "refusal": False,
+        "raw": json.dumps(payload),
+        "spans": detected_spans,
+        "summary": payload.get("summary", {}),
+    }
+
+
+def detect_guard_pii(parsed):
     """Determine if the model flagged PII.
 
     PII detected = (Unsafe or Controversial) AND 'pii' mentioned in categories.
@@ -648,6 +698,20 @@ def main():
         print(f"Error: Dataset not found at {args.dataset}", file=sys.stderr)
         sys.exit(1)
 
+    privacy_filter_model = is_privacy_filter_model(args.model)
+    if privacy_filter_model and args.mlx:
+        print(
+            "Error: openai/privacy-filter is not supported with --mlx.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    if privacy_filter_model and args.quantize_4bit:
+        print(
+            "Error: openai/privacy-filter does not support --4bit.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
     with open(args.dataset) as f:
         dataset = json.load(f)
 
@@ -670,17 +734,26 @@ def main():
     # Set up model inference if needed
     local_model = None
     local_tokenizer = None
+    privacy_filter_runtime = None
+    privacy_filter_device = None
     mlx_model = None
     mlx_tokenizer = None
     use_model = mode in ("model", "combined")
 
     # Determine if model natively outputs guard format or needs a system prompt
-    use_guard_format = args.guard_format or (
+    use_guard_format = not privacy_filter_model and (args.guard_format or (
         not args.mlx and "guard" in args.model.lower()
-    )
+    ))
 
     if use_model:
-        if args.mlx:
+        if privacy_filter_model:
+            privacy_filter_runtime, privacy_filter_device = load_privacy_filter_model(
+                args.model
+            )
+            print(
+                f"Using model: {args.model} (opf, device={privacy_filter_device})"
+            )
+        elif args.mlx:
             mlx_model, mlx_tokenizer = load_mlx_model(args.model)
             print(f"Using model: {args.model} (MLX, guard_format={use_guard_format})")
         elif args.local:
@@ -698,7 +771,7 @@ def main():
     for entry in tqdm(dataset, desc="Evaluating"):
         raw_output = ""
         parsed = {"safety": None, "categories": [], "refusal": None, "raw": ""}
-        qwen_detected = False
+        model_detected = False
         presidio_detected = False
         parse_error = False
         latency_ms = None
@@ -707,7 +780,14 @@ def main():
         if use_model:
             sys_prompt = None if use_guard_format else PII_DETECTION_SYSTEM_PROMPT
             t0 = time.perf_counter()
-            if args.mlx:
+            if privacy_filter_model:
+                privacy_filter_output = query_privacy_filter_model(
+                    privacy_filter_runtime, entry["query"]
+                )
+                parsed = parse_privacy_filter_output(privacy_filter_output)
+                raw_output = parsed["raw"]
+                model_detected = bool(parsed.get("spans"))
+            elif args.mlx:
                 raw_output = query_mlx_model(
                     mlx_model, mlx_tokenizer, entry["query"],
                     max_tokens=args.mlx_max_tokens,
@@ -726,9 +806,12 @@ def main():
                     timeout=args.timeout,
                 )
             latency_ms = (time.perf_counter() - t0) * 1000
-            parsed = parse_guard_output(raw_output)
-            qwen_detected = detect_pii(parsed)
-            parse_error = parsed["safety"] is None
+            if privacy_filter_model:
+                parse_error = False
+            else:
+                parsed = parse_guard_output(raw_output)
+                model_detected = detect_guard_pii(parsed)
+                parse_error = parsed["safety"] is None
 
         # Presidio detection
         if presidio_analyzer is not None:
@@ -740,13 +823,13 @@ def main():
         if mode == "presidio":
             predicted = presidio_detected
         elif mode in ("presidio", "combined"):
-            predicted = qwen_detected or presidio_detected
+            predicted = model_detected or presidio_detected
         else:
-            predicted = qwen_detected
+            predicted = model_detected
 
         # Determine which component(s) flagged PII
         flagged_by = []
-        if qwen_detected:
+        if model_detected:
             flagged_by.append("model")
         if presidio_detected:
             flagged_by.append("presidio")
@@ -764,7 +847,7 @@ def main():
             "parsed": parsed,
             "parse_error": parse_error,
             "presidio_detected": presidio_detected,
-            "qwen_detected": qwen_detected,
+            "model_detected": model_detected,
             "latency_ms": latency_ms,
         }
         if presidio_analyzer is not None:

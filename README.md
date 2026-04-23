@@ -1,7 +1,11 @@
 # qwen3guard-pii-test
 
-Lightweight evaluation harness for testing Qwen3Guard PII detection through a
-vLLM OpenAI-compatible API endpoint.
+Lightweight evaluation harness for testing PII detection models.
+
+Currently supported backends:
+
+- `Qwen/Qwen3Guard-Gen-4B` and similar guard/chat models through a vLLM OpenAI-compatible API endpoint.
+- `openai/privacy-filter` through OpenAI's local OPF runtime.
 
 ## What is in this repo
 
@@ -37,8 +41,16 @@ A ready-made notebook is provided at `colab_qwen3guard_gen_4b.ipynb`.
 Install dependencies:
 
 ```bash
-pip install -U vllm requests tabulate tqdm
+pip install -r requirements.txt
 ```
+
+If you want to run the vLLM API path as well, install `vllm` separately:
+
+```bash
+pip install -U vllm
+```
+
+### Qwen3Guard / chat guard models
 
 Start vLLM:
 
@@ -55,6 +67,24 @@ Run evaluator:
 ```bash
 python detect_pii.py --api-base http://localhost:8000/v1
 ```
+
+### OpenAI Privacy Filter
+
+`openai/privacy-filter` is a token-classification model, so it does not use the
+OpenAI-compatible chat API path. The evaluator automatically runs it locally via
+the `opf` runtime.
+
+```bash
+python detect_pii.py \
+  --model openai/privacy-filter \
+  --output results/privacy-filter.json \
+  --verbose
+```
+
+Notes:
+
+- The first run may download the checkpoint into `~/.opf/privacy_filter`.
+- Any detected OPF span is treated as a positive PII detection for evaluator metrics.
 
 ## CLI options
 
@@ -76,4 +106,5 @@ python detect_pii.py --api-base http://localhost:8000/v1
   `Safety: ...`, `Categories: ...`, `Refusal: ...`.
 - A case is counted as PII only when:
   `Safety` is `Unsafe` or `Controversial` and categories include `PII`.
+- `openai/privacy-filter` is handled separately as a span detector instead of a chat model.
 - If the server is unreachable, verify vLLM is running and that `--api-base` is correct.
